@@ -11,6 +11,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 import warnings
+from pathlib import Path
+from datetime import datetime
+import joblib
 warnings.filterwarnings("ignore")
 
 # ─── Page Config ────────────────────────────────────────────────────────────
@@ -427,6 +430,26 @@ def compute_decision_support(df: pd.DataFrame) -> dict:
     return insights
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  MODEL ARTIFACT PERSISTENCE
+# ─────────────────────────────────────────────────────────────────────────────
+ARTIFACT_DIR = Path("artifacts")
+ARTIFACT_PATH = ARTIFACT_DIR / "trained_dashboard_state.joblib"
+
+
+def save_artifact(payload: dict):
+    ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
+    joblib.dump(payload, ARTIFACT_PATH)
+
+
+def load_artifact() -> dict:
+    return joblib.load(ARTIFACT_PATH)
+
+
+def artifact_exists() -> bool:
+    return ARTIFACT_PATH.exists()
+
+
 # ════════════════════════════════════════════════════════════════════════════
 #  SIDEBAR
 # ════════════════════════════════════════════════════════════════════════════
@@ -450,7 +473,19 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("### ⚙️ Pipeline Control")
-    run_btn = st.button("🚀 Run Full Analysis", use_container_width=True)
+    has_saved_artifact = artifact_exists()
+    if has_saved_artifact:
+        st.success("Saved trained model found.")
+    else:
+        st.caption("No saved trained model found yet.")
+
+    retrain_model = st.toggle(
+        "🔁 Retrain model from uploaded CSV",
+        value=not has_saved_artifact,
+        help="Turn off to instantly load the last saved trained model."
+    )
+    run_label = "🚀 Run Full Analysis & Save Model" if retrain_model else "📦 Load Saved Model"
+    run_btn = st.button(run_label, use_container_width=True)
 
     st.markdown("---")
     st.markdown("### 📊 Dashboard Info")
@@ -492,26 +527,14 @@ font-size:2.2rem; margin-bottom:4px;'>
 🛒 AI E-Commerce Decision Intelligence Dashboard
 </h1>
 <p style='text-align:center; color:#8899bb; margin-bottom:20px;'>
-Upload your dataset → Run analysis → Explore 13 intelligent tabs
+Load saved model or upload dataset to retrain → Explore 13 intelligent tabs
 </p>
 """, unsafe_allow_html=True)
-
-# ── Guard ─────────────────────────────────────────────────────────────────
-if uploaded_file is None:
-    st.info("👈 Please upload a CSV file using the sidebar to get started.")
-    st.stop()
 
 # ── Load raw data ─────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def load_data(file):
     return pd.read_csv(file)
-
-raw_df = load_data(uploaded_file)
-
-if not run_btn and 'pipeline_done' not in st.session_state:
-    st.info("✅ Dataset loaded! Click **🚀 Run Full Analysis** in the sidebar to continue.")
-    st.dataframe(raw_df.head(10), use_container_width=True)
-    st.stop()
 
 # ── Run pipeline (cached) ─────────────────────────────────────────────────
 @st.cache_resource(show_spinner="🔄 Running ML pipeline — this may take a moment…")
@@ -538,9 +561,61 @@ def run_full_pipeline(file_name: str, _df: pd.DataFrame):
         "demand_y_test": demand_y_test,
     }
 
-with st.spinner("Running full analysis pipeline…"):
-    D = run_full_pipeline(uploaded_file.name, raw_df)
-    st.session_state['pipeline_done'] = True
+# ── Control flow: load saved vs retrain ───────────────────────────────────
+D = st.session_state.get("pipeline_data")
+artifact_meta = st.session_state.get("artifact_meta")
+
+if not retrain_model:
+    if not artifact_exists():
+        st.warning("No saved model is available yet. Please enable retrain and upload a CSV once.")
+        st.stop()
+
+    if run_btn:
+        with st.spinner("Loading saved model and analysis state..."):
+            loaded_payload = load_artifact()
+            D = loaded_payload["pipeline_data"]
+            artifact_meta = loaded_payload.get("meta", {})
+            st.session_state["pipeline_data"] = D
+            st.session_state["artifact_meta"] = artifact_meta
+            st.session_state["pipeline_done"] = True
+        st.success("Loaded saved trained model.")
+    elif D is None:
+        st.info("Click **📦 Load Saved Model** in the sidebar to continue.")
+        st.stop()
+else:
+    if uploaded_file is None:
+        st.info("👈 Please upload a CSV file using the sidebar to retrain.")
+        st.stop()
+
+    raw_df = load_data(uploaded_file)
+
+    if not run_btn and D is None:
+        st.info("✅ Dataset loaded! Click **🚀 Run Full Analysis & Save Model** in the sidebar to continue.")
+        st.dataframe(raw_df.head(10), use_container_width=True)
+        st.stop()
+
+    if run_btn:
+        with st.spinner("Running full analysis pipeline..."):
+            D = run_full_pipeline(uploaded_file.name, raw_df)
+            artifact_meta = {
+                "dataset_name": uploaded_file.name,
+                "trained_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            save_artifact({
+                "pipeline_data": D,
+                "meta": artifact_meta,
+            })
+            st.session_state["pipeline_data"] = D
+            st.session_state["artifact_meta"] = artifact_meta
+            st.session_state["pipeline_done"] = True
+        st.success("Model retrained and saved successfully.")
+    elif D is None:
+        st.stop()
+
+if artifact_meta:
+    ds_name = artifact_meta.get("dataset_name", "Unknown dataset")
+    trained_on = artifact_meta.get("trained_at", "Unknown time")
+    st.caption(f"Using saved model from `{ds_name}` trained at `{trained_on}`.")
 
 df_raw      = D["raw"]
 df_clean    = D["cleaned"]

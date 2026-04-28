@@ -12,8 +12,8 @@ streamlit run app.py
 ## Usage
 
 1. Open the app in your browser (default: http://localhost:8501)
-2. Upload your CSV dataset via the sidebar
-3. Click **🚀 Run Full Analysis**
+2. If a saved model exists, choose **📦 Load Saved Model** for instant startup
+3. To train on new data, enable retrain, upload CSV, then click **🚀 Run Full Analysis & Save Model**
 4. Explore all 13 tabs
 
 ## Dataset Columns Expected
@@ -47,3 +47,4 @@ Missing columns are handled gracefully.
 
 - **Zero existing logic modified** — all preprocessing, feature engineering, and ML code is identical to the notebooks.
 - New tabs use separate functions that call existing features as inputs only.
+- Trained model + pipeline state are persisted to `artifacts/trained_dashboard_state.joblib` for reuse.
